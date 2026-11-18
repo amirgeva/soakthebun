@@ -71,6 +71,14 @@ public:
         return key;
     }
 
+    // A bun on a square from which no puddle is reachable can never be
+    // soaked, so the position is lost without any search.
+    bool startIsDead() const {
+        for (int b : lv_.boxes)
+            if (!alive[size_t(b)]) return true;
+        return false;
+    }
+
     uint64_t startKey() {
         for (int i = 0; i < k_; ++i) boxes[i] = lv_.boxes[size_t(i)];
         sortSmall(boxes, k_);
@@ -175,6 +183,10 @@ SolveResult solveLevel(const Level& lv, int maxStates) {
     SolveResult res;
     if (!PushSearch::supported(lv)) return res;
     PushSearch search(lv, maxStates);
+    if (search.startIsDead()) {
+        res.exhausted = true;
+        return res;
+    }
     std::vector<uint64_t> cur{search.startKey()}, next;
 
     for (int layer = 0; !cur.empty(); ++layer) {
@@ -196,9 +208,14 @@ SolveResult solveLevel(const Level& lv, int maxStates) {
     return res;
 }
 
-std::string solutionMoves(const Level& lv, int maxStates) {
-    if (!PushSearch::supported(lv)) return {};
+SolveResult solveWithMoves(const Level& lv, int maxStates, const std::atomic<bool>* cancel) {
+    SolveResult res;
+    if (!PushSearch::supported(lv)) return res;
     PushSearch search(lv, maxStates);
+    if (search.startIsDead()) {
+        res.exhausted = true;
+        return res;
+    }
 
     struct Entry {
         uint64_t raw;
@@ -215,23 +232,32 @@ std::string solutionMoves(const Level& lv, int maxStates) {
     std::vector<Entry> cur{Entry{search.startKey(), -1, -1, -1}}, next;
     int goal = -1;
 
-    for (; !cur.empty() && goal < 0; std::swap(cur, next)) {
+    for (int layer = 0; !cur.empty() && goal < 0; ++layer, std::swap(cur, next)) {
         next.clear();
         for (const Entry& e : cur) {
+            if (cancel && (pushes.size() & 1023) == 0 && cancel->load(std::memory_order_relaxed)) {
+                res.cancelled = true;
+                return res;
+            }
             if (!search.visit(e.raw)) continue;
             const int index = int(pushes.size());
             pushes.push_back(Push{e.parent, e.box, e.dir});
+            res.explored = index + 1;
             if (search.solved()) {
                 goal = index;
+                res.pushes = layer;
                 break;
             }
-            if (index + 1 >= maxStates) return {};
+            if (index + 1 >= maxStates) return res;
             search.forEachPush([&](uint64_t raw, int b, int d) {
                 next.push_back(Entry{raw, index, int16_t(b), int8_t(d)});
             });
         }
     }
-    if (goal < 0) return {};
+    if (goal < 0) {
+        res.exhausted = true;
+        return res;
+    }
 
     std::vector<Push> path;
     for (int i = goal; pushes[size_t(i)].parent >= 0; i = pushes[size_t(i)].parent) path.push_back(pushes[size_t(i)]);
@@ -244,13 +270,17 @@ std::string solutionMoves(const Level& lv, int maxStates) {
     std::string moves;
     for (const Push& p : path) {
         const int off = lv.offset(p.dir);
-        if (!appendWalk(lv, box, player, p.box - off, moves)) return {};
+        if (!appendWalk(lv, box, player, p.box - off, moves)) return res;  // cannot happen
         moves += kMoveChar[p.dir];
         box[size_t(p.box)] = 0;
         box[size_t(p.box + off)] = 1;
         player = p.box;
     }
-    return moves;
+    res.solved = true;
+    res.moves = std::move(moves);
+    return res;
 }
+
+std::string solutionMoves(const Level& lv, int maxStates) { return solveWithMoves(lv, maxStates).moves; }
 
 }  // namespace soak

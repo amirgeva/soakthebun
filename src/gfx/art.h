@@ -12,6 +12,7 @@ void ripple(const Pen& p);                  // white ring, animated over puddles
 void bun(const Pen& p, bool soaked);        // the "box": a sesame bun, dry or soggy
 void hero(const Pen& p, int facing);        // the player: a little water drop
 void dot(const Pen& p);                     // soft white particle
+void arrow(const Pen& p);                   // hint arrow, pointing right
 void icon(const Pen& p, bool background);   // app icon / title art
 
 }  // namespace soak::art

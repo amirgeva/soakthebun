@@ -28,6 +28,7 @@ constexpr float kWinDelay = 0.65f;     // let the last splash play before the ov
 constexpr float kRebakeDelay = 0.15f;  // wait for a window resize to settle
 constexpr int kMenuItems = 3;          // Start, Level, Quit
 constexpr float kPi = 3.14159265f;
+constexpr int kHintStates = 2500000;   // search budget for one hint (~2 s worst case)
 
 SDL_Color rgba(Uint8 r, Uint8 g, Uint8 b, Uint8 a = 255) { return SDL_Color{r, g, b, a}; }
 
@@ -143,6 +144,7 @@ bool Game::init(const Options& opt) {
 }
 
 void Game::shutdown() {
+    cancelHint();
     cancelJob(job_);
     cancelJob(prefetch_);
     audio_.shutdown();
@@ -207,6 +209,15 @@ int Game::runScreenshot(const Options& opt) {
         }
         for (int i = 0; i < 50 && scene_ == Scene::Playing && solvedPending_; ++i) update(step);
         for (int i = 0; i < 6; ++i) update(step);
+        if (opt.scene == "hint") {
+            press(SDLK_h);
+            const Uint32 start = SDL_GetTicks();
+            while (hintJob_.valid() && SDL_GetTicks() - start < 30000) {
+                update(step);
+                SDL_Delay(2);
+            }
+            for (int i = 0; i < 20; ++i) update(step);
+        }
         if (opt.scene == "won" && scene_ != Scene::Won) onWin();
         if (opt.scene == "next" && scene_ == Scene::Won) {
             press(SDLK_RETURN);  // should pick up the prefetched level
@@ -413,6 +424,9 @@ void Game::beginLevel(Level&& level) {
     levelNum_ = level.number;
     board_.load(level);
     rebakeNow_ = true;  // new room size: no need to wait for a resize to settle
+    cancelHint();
+    hint_.active = false;
+    caption_.clear();
     scene_ = Scene::Playing;
     anim_ = Anim{};
     particles_.clear();
@@ -428,6 +442,9 @@ void Game::beginLevel(Level&& level) {
 
 void Game::goToMenu(int level) {
     cancelJob(job_);
+    cancelHint();
+    hint_.active = false;
+    caption_.clear();
     setMenuLevel(level);
     menuSel_ = 0;
     scene_ = Scene::Menu;
@@ -522,6 +539,8 @@ void Game::onKeyDown(SDL_Keycode key, bool repeat) {
                 }
             } else if (key == SDLK_u || key == SDLK_z || key == SDLK_BACKSPACE) {
                 undo();
+            } else if (key == SDLK_h && !repeat) {
+                requestHint();
             } else if (key == SDLK_r && !repeat) {
                 restart();
             } else if (key == SDLK_ESCAPE && !repeat) {
@@ -599,6 +618,8 @@ void Game::undo() {
 
 void Game::restart() {
     board_.restart();
+    cancelHint();
+    hint_.active = false;
     anim_ = Anim{};
     particles_.clear();
     solvedPending_ = false;
@@ -610,6 +631,8 @@ void Game::restart() {
 void Game::onWin() {
     scene_ = Scene::Won;
     heldDir_ = -1;
+    hint_.active = false;
+    caption_.clear();
     audio_.play(Sfx::Win);
     // The menu now offers the next level by default.
     save_.lastLevel = std::min(levelNum_ + 1, kMaxLevel);
@@ -622,6 +645,76 @@ void Game::toggleMute() {
     save_.muted = !save_.muted;
     audio_.setMuted(save_.muted);
     persist();
+}
+
+void Game::showMessage(const std::string& text, float seconds) {
+    caption_ = text;
+    captionStart_ = time_;
+    captionEnd_ = time_ + seconds;
+}
+
+// Solves from the current position in the background; pollHint() picks up
+// the first push of the best (fewest pushes) solution.
+void Game::requestHint() {
+    if (scene_ != Scene::Playing || solvedPending_ || hintJob_.valid()) return;
+    finishAnim();
+    if (hint_.active) return;  // the current hint still applies
+    Level pos = board_.level();
+    pos.boxes = board_.boxes();
+    pos.player = board_.player();
+    hintJob_.boxes = pos.boxes;
+    hintJob_.player = pos.player;
+    hintJob_.cancel = std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<std::atomic<bool>> flag = hintJob_.cancel;
+    hintJob_.result = std::async(std::launch::async, [pos = std::move(pos), flag] {
+        return solveWithMoves(pos, kHintStates, flag.get());
+    });
+    showMessage("THINKING...", 120.f);
+}
+
+void Game::pollHint() {
+    if (!hintJob_.valid()) return;
+    if (board_.boxes() != hintJob_.boxes) {  // a push or undo made it stale
+        cancelHint();
+        caption_.clear();
+        return;
+    }
+    if (hintJob_.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    const SolveResult r = hintJob_.result.get();
+    Level pos = board_.level();
+    pos.boxes = hintJob_.boxes;
+    pos.player = hintJob_.player;
+    hintJob_ = HintJob{};
+
+    if (r.solved && !r.moves.empty()) {
+        Board sim;
+        sim.load(pos);
+        for (char m : r.moves) {
+            const int dir = m == 'U' ? DirUp : m == 'R' ? DirRight : m == 'D' ? DirDown : DirLeft;
+            if (sim.move(dir) == Board::Result::Pushed) {
+                hint_.active = true;
+                hint_.dir = dir;
+                hint_.boxCell = sim.boxes()[size_t(sim.lastPushedBox())] - pos.offset(dir);
+                hint_.boxes = pos.boxes;
+                break;
+            }
+        }
+        char msg[96];
+        if (r.pushes == 1) std::snprintf(msg, sizeof msg, "HINT: ONE LAST PUSH!");
+        else std::snprintf(msg, sizeof msg, "HINT: PUSH THE MARKED BUN - %d PUSHES LEFT AT BEST", r.pushes);
+        showMessage(msg, 4.5f);
+    } else if (r.exhausted) {
+        showMessage("STUCK - NO SOLUTION FROM HERE. TRY UNDO (U)", 4.5f);
+    } else if (!r.cancelled) {
+        showMessage("TOO TRICKY TO HINT FROM HERE - TRY UNDO (U)", 4.5f);
+    }
+}
+
+void Game::cancelHint() {
+    if (!hintJob_.valid()) return;
+    hintJob_.cancel->store(true);
+    hintJob_.result.wait();
+    hintJob_ = HintJob{};
 }
 
 // ---------------------------------------------------------------- simulation
@@ -691,6 +784,9 @@ void Game::update(float dt) {
                 winTimer_ -= dt;
                 if (winTimer_ <= 0.f) onWin();
             }
+            // A hint is only valid for the bun layout it was computed for.
+            if (hint_.active && board_.boxes() != hint_.boxes) hint_.active = false;
+            pollHint();
             break;
         default:
             break;
@@ -759,7 +855,7 @@ void Game::createStaticAssets() {
 void Game::destroySprites() {
     SDL_Texture** all[] = {&sprites_.floor[0], &sprites_.floor[1], &sprites_.wall,    &sprites_.puddle,
                            &sprites_.bun,      &sprites_.soaked,   &sprites_.hero[0], &sprites_.hero[1],
-                           &sprites_.hero[2],  &sprites_.hero[3]};
+                           &sprites_.hero[2],  &sprites_.hero[3], &sprites_.arrow};
     for (SDL_Texture** t : all) {
         if (*t) SDL_DestroyTexture(*t);
         *t = nullptr;
@@ -792,6 +888,7 @@ void Game::ensureSprites(int tile) {
     sprites_.bun = bake([](const Pen& p) { art::bun(p, false); });
     sprites_.soaked = bake([](const Pen& p) { art::bun(p, true); });
     for (int d = 0; d < 4; ++d) sprites_.hero[d] = bake([d](const Pen& p) { art::hero(p, d); });
+    sprites_.arrow = bake([](const Pen& p) { art::arrow(p); });
 }
 
 void Game::ensureTitleArt(int size) {
@@ -1033,6 +1130,8 @@ void Game::renderBoard() {
         }
     }
 
+    renderHint(l, false);
+
     const float k = anim_.active ? easeOut(anim_.t / anim_.duration) : 1.f;
     const std::vector<int>& boxes = board_.boxes();
     for (size_t i = 0; i < boxes.size(); ++i) {
@@ -1058,6 +1157,7 @@ void Game::renderBoard() {
     }
     const SDL_Rect hr = at(px, py + lift);
     SDL_RenderCopy(renderer_, sprites_.hero[facing_], nullptr, &hr);
+    renderHint(l, true);
 
     if (dot_) {
         SDL_SetTextureColorMod(dot_, 140, 215, 255);
@@ -1089,7 +1189,7 @@ void Game::renderHud() {
     drawText(buf, viewW_ - pad, y, s, rgba(140, 215, 255), 1);
 
     const std::string help = std::string(SOAK_ARROW_LEFT SOAK_ARROW_UP SOAK_ARROW_DOWN SOAK_ARROW_RIGHT
-                                         " MOVE   U UNDO   R RESTART   M ") +
+                                         " MOVE   U UNDO   R RESTART   H HINT   M ") +
                              (audio_.muted() ? "UNMUTE" : "MUTE") + "   ESC MENU";
     const int hs = fitScale(help, viewW_ - 4 * s, s >= 3 ? s - 1 : s);
     drawText(help, viewW_ / 2, viewH_ - 7 * hs - 3 * s, hs, rgba(190, 215, 240, 200), 0);
@@ -1135,6 +1235,63 @@ void Game::renderWon() {
     drawText(l3, cx, y, bs, perfect ? rgba(140, 255, 170) : rgba(165, 220, 255), 0);
     y += 7 * bs + 9 * s;
     drawText(keys, cx, y, bs, rgba(255, 220, 120), 0);
+}
+
+// Under the buns: footsteps to where the push starts and a gold halo around
+// the bun. Over them: an arrow showing the push direction.
+void Game::renderHint(const Layout& l, bool overBuns) {
+    if (!hint_.active) return;
+    const Level& lv = board_.level();
+    const int t = l.tile, w = lv.width;
+    const float pulse = 0.5f + 0.5f * std::sin(time_ * 6.f);
+    const float bx = float(hint_.boxCell % w), by = float(hint_.boxCell / w);
+
+    if (overBuns) {
+        if (!sprites_.arrow) return;
+        const float reach = 0.62f + 0.08f * pulse;
+        const float cx = (bx + 0.5f + float(kDirX[hint_.dir]) * reach) * float(t);
+        const float cy = (by + 0.5f + float(kDirY[hint_.dir]) * reach) * float(t);
+        const int size = std::max(8, int(float(t) * 0.62f));
+        SDL_Rect r{l.ox + int(cx) - size / 2, l.oy + int(cy) - size / 2, size, size};
+        SDL_RenderCopyEx(renderer_, sprites_.arrow, nullptr, &r, double(hint_.dir - 1) * 90.0, nullptr,
+                         SDL_FLIP_NONE);
+        return;
+    }
+
+    // Shortest walk from the player to the cell behind the bun.
+    const int stand = hint_.boxCell - lv.offset(hint_.dir);
+    std::vector<int> via(size_t(lv.cellCount()), -1);
+    std::vector<int> queue{board_.player()};
+    via[size_t(board_.player())] = board_.player();
+    for (size_t qi = 0; qi < queue.size() && via[size_t(stand)] < 0; ++qi) {
+        for (int d = 0; d < 4; ++d) {
+            const int c = queue[qi] + lv.offset(d);
+            if (!lv.isFloor(c) || board_.boxAt(c) >= 0 || via[size_t(c)] >= 0) continue;
+            via[size_t(c)] = queue[qi];
+            queue.push_back(c);
+        }
+    }
+    if (dot_ && via[size_t(stand)] >= 0) {
+        SDL_SetTextureColorMod(dot_, 255, 214, 90);
+        SDL_SetTextureAlphaMod(dot_, Uint8(170 + 60 * pulse));
+        const int size = std::max(3, t / 6);
+        for (int c = stand; c != board_.player(); c = via[size_t(c)]) {
+            SDL_Rect r{l.ox + (c % w) * t + (t - size) / 2, l.oy + (c / w) * t + (t - size) / 2, size, size};
+            SDL_RenderCopy(renderer_, dot_, nullptr, &r);
+        }
+    }
+    SDL_SetRenderDrawColor(renderer_, 255, 200, 60, Uint8(70 + 50 * pulse));
+    SDL_Rect glow{l.ox + int(bx) * t, l.oy + int(by) * t, t, t};
+    SDL_RenderFillRect(renderer_, &glow);
+    if (ripple_) {
+        const float size = float(t) * (1.2f + 0.12f * pulse);
+        SDL_Rect r{l.ox + int((bx + 0.5f) * float(t) - size * 0.5f), l.oy + int((by + 0.66f) * float(t) - size * 0.5f),
+                   int(size), int(size)};
+        SDL_SetTextureColorMod(ripple_, 255, 205, 70);
+        SDL_SetTextureAlphaMod(ripple_, Uint8(190 + 65 * pulse));
+        SDL_RenderCopy(renderer_, ripple_, nullptr, &r);
+        SDL_SetTextureColorMod(ripple_, 255, 255, 255);
+    }
 }
 
 void Game::renderCaption() {

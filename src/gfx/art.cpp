@@ -62,6 +62,22 @@ void dot(const Pen& p) {
     p.circle(0.5f, 0.5f, 0.36f, solid(rgb(0xFFFFFF)));
 }
 
+void arrow(const Pen& p) {
+    // Shaft plus triangular head, grown by g for the outline.
+    auto inside = [](float g) {
+        return [=](float x, float y) {
+            const float dy = std::fabs(y - 0.5f);
+            if (x >= 0.10f - g && x <= 0.56f && dy <= 0.10f + g) return true;
+            const float base = 0.48f - g, apex = 0.90f + g * 1.6f, half = 0.32f + g;
+            return x >= base && x <= apex && dy <= half * (apex - x) / (apex - base);
+        };
+    };
+    p.fill(0.f, 0.f, 1.f, 1.f, inside(0.05f), solid(rgb(0x5A3000)));
+    p.fill(0.f, 0.f, 1.f, 1.f, inside(0.f), VGrad{0.2f, 0.8f, rgb(0xFFF09A), rgb(0xFFA914)});
+    p.fill(0.f, 0.f, 1.f, 1.f, [](float x, float y) { return x >= 0.14f && x <= 0.55f && y >= 0.43f && y <= 0.47f; },
+           solid(rgb(0xFFFFFF, 0.55f)));
+}
+
 void bun(const Pen& p, bool soaked) {
     const float sag = soaked ? 0.05f : 0.f;
 

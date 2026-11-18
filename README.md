@@ -19,12 +19,27 @@ A 720p version of the intro is in [docs/intro.mp4](docs/intro.mp4).
 | Arrow keys | Walk / push a bun (hold to keep walking) |
 | U, Z or Backspace | Undo (hold to undo repeatedly) |
 | R | Restart the level |
+| H | Hint: show the best next push |
 | M | Mute / unmute |
 | Esc | Back to the menu |
 | F11 or Alt+Enter | Toggle fullscreen |
 
 A bun can only be pushed, never pulled, and only one at a time, so it is easy
 to wedge one into a corner. Undo is your friend.
+
+### Hints
+
+Press **H** when you're stuck. The game solves the puzzle from your current
+position, in the background so play never freezes, and finds the solution with
+the fewest pushes. It then marks the bun to push with a gold glow and an arrow,
+and draws footsteps to where you need to stand. It also tells you how many
+pushes are left at best.
+
+You can keep walking while the hint shows, and the footsteps follow you. Any
+push, undo or restart clears it. If a bun is already wedged where it can never
+reach a puddle, the hint says you're stuck and suggests undoing. On the very
+largest levels the search may give up and say the position is too tricky to
+hint.
 
 ### Level menu
 
@@ -138,7 +153,7 @@ build/Release/soak_tests 80 1 --print      # levels 1-80, printing each as text
 --level N              preselect level N in the menu
 --size WxH             window size (default 1024x768)
 --screenshot FILE.bmp  render one frame to a file and exit (does not touch the save)
---scene menu|game|won|next   what to render with --screenshot
+--scene menu|game|won|next|hint   what to render with --screenshot
 --moves UDLR...        moves to play before taking the screenshot
 --record FILE|-        play the scripted intro, writing raw RGB24 frames ("-" = stdout)
 --fps N                frame rate for --record (default 30)

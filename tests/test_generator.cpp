@@ -2,7 +2,9 @@
 //  * each level is well formed (box/goal counts, player on free floor),
 //  * generation is deterministic,
 //  * an independent forward solver confirms the level is solvable and that
-//    the generator's claimed minimum push count is exact.
+//    the generator's claimed minimum push count is exact,
+//  * the move-by-move solution replays correctly, and solving from a
+//    mid-game or lost position (what the in-game hint does) works.
 //
 // Usage: soak_tests [lastLevel=30] [firstLevel=1] [--print] [--solver-budget N]
 
@@ -57,6 +59,49 @@ bool wellFormed(const Level& lv, std::string& why) {
     return true;
 }
 
+int dirOf(char m) { return m == 'U' ? DirUp : m == 'R' ? DirRight : m == 'D' ? DirDown : DirLeft; }
+
+// The current position of a board, as a level the solver can start from.
+Level positionOf(const Board& board) {
+    Level s = board.level();
+    s.boxes = board.boxes();
+    s.player = board.player();
+    return s;
+}
+
+// Checks what the in-game hint relies on: solving from a mid-game position,
+// and recognising a lost position.
+bool hintChecks(const Level& lv, const std::string& moves, int budget, std::string& why) {
+    // Halfway through an optimal solution, the rest must still be optimal.
+    Board board;
+    board.load(lv);
+    for (size_t i = 0; i < moves.size() / 2; ++i) board.move(dirOf(moves[i]));
+    const SolveResult mid = solveWithMoves(positionOf(board), budget);
+    if (!mid.solved || mid.pushes != lv.optimalPushes - board.pushes()) {
+        why = "hint from mid-game position is not optimal";
+        return false;
+    }
+
+    // A bun in a corner that is not a puddle can never be soaked.
+    for (int c = 0; c < lv.cellCount(); ++c) {
+        if (!lv.isFloor(c) || lv.isGoal(c) || c == lv.player) continue;
+        if (std::find(lv.boxes.begin(), lv.boxes.end(), c) != lv.boxes.end()) continue;
+        bool corner = false;
+        for (int d = 0; d < 4; ++d)
+            if (!lv.isFloor(c + lv.offset(d)) && !lv.isFloor(c + lv.offset((d + 1) % 4))) corner = true;
+        if (!corner) continue;
+        Level stuck = lv;
+        stuck.boxes[0] = c;
+        const SolveResult r = solveWithMoves(stuck, budget);
+        if (!r.exhausted || r.solved) {
+            why = "lost position not recognised";
+            return false;
+        }
+        break;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -105,11 +150,15 @@ int main(int argc, char** argv) {
                 const int dir = m == 'U' ? DirUp : m == 'R' ? DirRight : m == 'D' ? DirDown : DirLeft;
                 if (board.move(dir) == Board::Result::Blocked) legal = false;
             }
-            if (legal && board.solved() && board.pushes() == lv.optimalPushes) {
-                std::snprintf(verdict, sizeof verdict, "ok (%d states, %d moves)", sr.explored, int(moves.size()));
-            } else {
+            std::string why2;
+            if (!legal || !board.solved() || board.pushes() != lv.optimalPushes) {
                 std::snprintf(verdict, sizeof verdict, "FAIL: replayed solution invalid");
                 ++failures;
+            } else if (!hintChecks(lv, moves, budget, why2)) {
+                std::snprintf(verdict, sizeof verdict, "FAIL: %s", why2.c_str());
+                ++failures;
+            } else {
+                std::snprintf(verdict, sizeof verdict, "ok (%d states, %d moves)", sr.explored, int(moves.size()));
             }
         } else if (sr.solved) {
             std::snprintf(verdict, sizeof verdict, "FAIL: solver says %d pushes", sr.pushes);

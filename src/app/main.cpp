@@ -15,7 +15,7 @@ void usage() {
         "  --level N              preselect level N in the menu\n"
         "  --size WxH             window size (default 1024x768)\n"
         "  --screenshot FILE.bmp  render one frame and exit\n"
-        "  --scene menu|game|won|next  scene for --screenshot (default game)\n"
+        "  --scene menu|game|won|next|hint  scene for --screenshot (default game)\n"
         "  --moves UDLR...        moves to play before the screenshot\n"
         "  --record FILE|-        play the scripted intro, writing raw RGB24 frames\n"
         "                         (- = stdout; see tools/make_intro.sh)\n"

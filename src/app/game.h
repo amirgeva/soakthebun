@@ -11,6 +11,7 @@
 #include "app/audio.h"
 #include "app/save.h"
 #include "core/level.h"
+#include "core/solver.h"
 
 namespace soak {
 
@@ -43,6 +44,7 @@ private:
         SDL_Texture* bun = nullptr;
         SDL_Texture* soaked = nullptr;
         SDL_Texture* hero[4] = {nullptr, nullptr, nullptr, nullptr};
+        SDL_Texture* arrow = nullptr;
     };
     struct Anim {
         bool active = false;
@@ -55,6 +57,21 @@ private:
     };
     struct Drop {
         float x, y, speed, len;
+    };
+    // A background solve from the current position (the H key).
+    struct HintJob {
+        std::shared_ptr<std::atomic<bool>> cancel;
+        std::future<SolveResult> result;
+        std::vector<int> boxes;  // bun positions when the hint was asked for
+        int player = 0;
+        bool valid() const { return result.valid(); }
+    };
+    // The hint being shown: push bun at boxCell in direction dir.
+    struct Hint {
+        bool active = false;
+        int boxCell = 0;
+        int dir = 0;
+        std::vector<int> boxes;  // shown only while the buns stay put
     };
     struct Job {
         int level = 0;
@@ -86,6 +103,10 @@ private:
     void restart();
     void onWin();
     void toggleMute();
+    void requestHint();
+    void pollHint();
+    void cancelHint();
+    void showMessage(const std::string& text, float seconds);
     void setMenuLevel(int level);
 
     static Job startJob(int number);
@@ -106,6 +127,7 @@ private:
     void renderHud();
     void renderWon();
     void renderCaption();
+    void renderHint(const Layout& l, bool overBuns);
     Layout layout() const;
     int uiScale() const;
     int fitScale(const std::string& text, int maxWidth, int scale) const;
@@ -175,7 +197,10 @@ private:
     Job job_;
     Job prefetch_;
 
-    // Subtitle shown in the recorded intro.
+    Hint hint_;
+    HintJob hintJob_;
+
+    // Subtitle / status message (intro captions, hint messages).
     std::string caption_;
     float captionStart_ = 0.f, captionEnd_ = 0.f;
 };
