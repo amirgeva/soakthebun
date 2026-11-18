@@ -23,6 +23,8 @@ struct Options {
     std::string screenshot;  // render one frame to this .bmp and exit
     std::string scene = "game";  // screenshot scene: menu | game | won
     std::string moves;       // screenshot: moves to play first (U/D/L/R)
+    std::string record;      // play the scripted intro, raw RGB24 frames to this file ("-" = stdout)
+    int fps = 30;            // frame rate for --record
 };
 
 class Game {
@@ -68,6 +70,7 @@ private:
     void shutdown();
     void persist();
     int runScreenshot(const Options& opt);
+    int runRecord(const Options& opt);
 
     // Input and game flow.
     void handleEvent(const SDL_Event& e);
@@ -102,6 +105,7 @@ private:
     void renderBoard();
     void renderHud();
     void renderWon();
+    void renderCaption();
     Layout layout() const;
     int uiScale() const;
     int fitScale(const std::string& text, int maxWidth, int scale) const;
@@ -163,12 +167,17 @@ private:
     Anim anim_;
     int facing_ = DirDown;
     int heldDir_ = -1;
+    float animSpeed_ = 1.f;  // > 1 speeds up move animations (recorded demo)
     float repeatTimer_ = 0.f;
     bool solvedPending_ = false;
     float winTimer_ = 0.f;
     std::vector<Particle> particles_;
     Job job_;
     Job prefetch_;
+
+    // Subtitle shown in the recorded intro.
+    std::string caption_;
+    float captionStart_ = 0.f, captionEnd_ = 0.f;
 };
 
 }  // namespace soak

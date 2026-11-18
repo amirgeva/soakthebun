@@ -16,7 +16,10 @@ void usage() {
         "  --size WxH             window size (default 1024x768)\n"
         "  --screenshot FILE.bmp  render one frame and exit\n"
         "  --scene menu|game|won|next  scene for --screenshot (default game)\n"
-        "  --moves UDLR...        moves to play before the screenshot\n");
+        "  --moves UDLR...        moves to play before the screenshot\n"
+        "  --record FILE|-        play the scripted intro, writing raw RGB24 frames\n"
+        "                         (- = stdout; see tools/make_intro.sh)\n"
+        "  --fps N                frame rate for --record (default 30)\n");
 }
 
 }  // namespace
@@ -44,6 +47,12 @@ int main(int argc, char* argv[]) {
             ++i;
         } else if (a == "--moves" && next) {
             opt.moves = next;
+            ++i;
+        } else if (a == "--record" && next) {
+            opt.record = next;
+            ++i;
+        } else if (a == "--fps" && next) {
+            opt.fps = std::atoi(next);
             ++i;
         } else if (a == "--help" || a == "-h") {
             usage();

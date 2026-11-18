@@ -93,9 +93,24 @@ int main(int argc, char** argv) {
         }
 
         const SolveResult sr = solveLevel(lv, budget);
-        char verdict[64];
+        char verdict[96];
         if (sr.solved && sr.pushes == lv.optimalPushes) {
-            std::snprintf(verdict, sizeof verdict, "ok (%d states)", sr.explored);
+            // The move-by-move solution must actually solve the level when
+            // played through the game's Board, with the minimum push count.
+            const std::string moves = solutionMoves(lv, budget);
+            Board board;
+            board.load(lv);
+            bool legal = !moves.empty();
+            for (char m : moves) {
+                const int dir = m == 'U' ? DirUp : m == 'R' ? DirRight : m == 'D' ? DirDown : DirLeft;
+                if (board.move(dir) == Board::Result::Blocked) legal = false;
+            }
+            if (legal && board.solved() && board.pushes() == lv.optimalPushes) {
+                std::snprintf(verdict, sizeof verdict, "ok (%d states, %d moves)", sr.explored, int(moves.size()));
+            } else {
+                std::snprintf(verdict, sizeof verdict, "FAIL: replayed solution invalid");
+                ++failures;
+            }
         } else if (sr.solved) {
             std::snprintf(verdict, sizeof verdict, "FAIL: solver says %d pushes", sr.pushes);
             ++failures;

@@ -1,5 +1,7 @@
 # Soak the Bun
 
+![Gameplay intro](docs/intro.gif)
+
 A block-pushing puzzle game in the spirit of the original Sokoban, written in
 C++17 with SDL2. You are a little water drop; push every hamburger bun into a
 puddle until they are all soaked.
@@ -7,6 +9,8 @@ puddle until they are all soaked.
 Every level is **generated procedurally** and gets harder as you go. All the
 art (tiles, buns, the hero, the app icon) and the sound effects are produced by
 code, so the game ships with no asset files.
+
+A 720p version of the intro is in [docs/intro.mp4](docs/intro.mp4).
 
 ## How to play
 
@@ -119,7 +123,9 @@ cmake --build build -j
 
 `soak_tests` generates levels and checks each one: it must be well formed,
 generated deterministically, and solvable. It also checks, with an independent
-forward solver, that the generator's minimum push count is exactly right.
+forward solver, that the generator's minimum push count is exactly right. The
+solver's move-by-move solution is then replayed through the game's board to
+confirm it really solves the level in that many pushes.
 
 ```sh
 ctest --test-dir build -C Release          # levels 1-40
@@ -134,7 +140,24 @@ build/Release/soak_tests 80 1 --print      # levels 1-80, printing each as text
 --screenshot FILE.bmp  render one frame to a file and exit (does not touch the save)
 --scene menu|game|won|next   what to render with --screenshot
 --moves UDLR...        moves to play before taking the screenshot
+--record FILE|-        play the scripted intro, writing raw RGB24 frames ("-" = stdout)
+--fps N                frame rate for --record (default 30)
 ```
+
+### Regenerating the intro video
+
+`tools/make_intro.sh` plays the scripted intro in an offscreen window. It
+solves levels 1, 2 and 12 with the optimal solver, using the normal key
+handling. The frames are piped into ffmpeg, which writes `docs/intro.mp4`
+(1280x720, 30 fps) and `docs/intro.gif` (640x360, 15 fps). You need bash and
+ffmpeg with libx264.
+
+```sh
+tools/make_intro.sh                    # uses build/Release/soakthebun or build/soakthebun
+tools/make_intro.sh path/to/soakthebun
+```
+
+The recording is deterministic and never touches your save file.
 
 ## Layout
 
@@ -142,6 +165,7 @@ build/Release/soak_tests 80 1 --print      # levels 1-80, printing each as text
 src/core/   level model, generator, solver (no SDL dependency)
 src/gfx/    software rasterizer, procedural art, 5x7 pixel font (no SDL dependency)
 src/app/    SDL2 game: scenes, input, rendering, audio, save file
-tools/      icongen: writes the app icon as a Windows .ico at build time
+tools/      icongen (app icon as a Windows .ico at build time), make_intro.sh (intro video)
 tests/      generator verification
+docs/       intro.gif / intro.mp4
 ```

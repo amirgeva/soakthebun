@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "core/level.h"
 
 namespace soak {
@@ -14,5 +16,9 @@ struct SolveResult {
 // Breadth-first search over pushes (forward play). Independent of the
 // generator, so it can verify generated levels. Gives up after maxStates.
 SolveResult solveLevel(const Level& level, int maxStates);
+
+// Full solution as player moves ('U', 'D', 'L', 'R'): minimum pushes, with
+// the shortest walk between pushes. Empty if not found within maxStates.
+std::string solutionMoves(const Level& level, int maxStates);
 
 }  // namespace soak

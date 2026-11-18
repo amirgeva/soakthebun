@@ -7,7 +7,13 @@
 #include <cstdio>
 #include <cstdlib>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 #include "core/generator.h"
+#include "core/solver.h"
 #include "gfx/art.h"
 #include "gfx/canvas.h"
 #include "gfx/font.h"
@@ -65,8 +71,8 @@ int Game::run(const Options& opt) {
         shutdown();
         return 1;
     }
-    if (!opt.screenshot.empty()) {
-        const int rc = runScreenshot(opt);
+    if (!opt.screenshot.empty() || !opt.record.empty()) {
+        const int rc = opt.record.empty() ? runScreenshot(opt) : runRecord(opt);
         shutdown();
         return rc;
     }
@@ -92,7 +98,7 @@ int Game::run(const Options& opt) {
 }
 
 bool Game::init(const Options& opt) {
-    const bool screenshot = !opt.screenshot.empty();
+    const bool screenshot = !opt.screenshot.empty() || !opt.record.empty();  // offscreen modes
     persist_ = !screenshot;
     // Crisp rendering on high-DPI Windows displays, with the window sized in
     // logical units (SDL 2.24+; ignored by older versions).
@@ -226,6 +232,136 @@ int Game::runScreenshot(const Options& opt) {
     if (surf) SDL_FreeSurface(surf);
     if (saved != 0) SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not save screenshot: %s", SDL_GetError());
     return saved == 0 ? 0 : 1;
+}
+
+// Plays a scripted gameplay intro at a fixed frame rate and writes every
+// frame as raw RGB24 (pipe it into ffmpeg; see tools/make_intro.sh). Levels
+// are solved with the optimal-push solver, through the normal key handling.
+int Game::runRecord(const Options& opt) {
+    fixedView_ = true;
+    viewW_ = opt.width;
+    viewH_ = opt.height;
+    save_ = SaveData{};  // a fresh player, whatever this machine has saved
+    setMenuLevel(1);
+
+    FILE* out = nullptr;
+    if (opt.record == "-") {
+#ifdef _WIN32
+        _setmode(_fileno(stdout), _O_BINARY);
+#endif
+        out = stdout;
+    } else {
+        out = std::fopen(opt.record.c_str(), "wb");
+    }
+    if (!out) {
+        std::fprintf(stderr, "cannot open %s for writing\n", opt.record.c_str());
+        return 1;
+    }
+    SDL_Texture* target =
+        SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, viewW_, viewH_);
+    if (!target) {
+        std::fprintf(stderr, "render target unavailable: %s\n", SDL_GetError());
+        if (out != stdout) std::fclose(out);
+        return 1;
+    }
+
+    const int fps = std::clamp(opt.fps, 10, 60);
+    const float dt = 1.f / float(fps);
+    std::vector<uint8_t> px(size_t(viewW_) * size_t(viewH_) * 3);
+    int frames = 0;
+    bool ok = true;
+
+    auto frame = [&] {
+        update(dt);
+        SDL_SetRenderTarget(renderer_, target);
+        render();
+        if (SDL_RenderReadPixels(renderer_, nullptr, SDL_PIXELFORMAT_RGB24, px.data(), viewW_ * 3) != 0) ok = false;
+        SDL_SetRenderTarget(renderer_, nullptr);
+        if (std::fwrite(px.data(), 1, px.size(), out) != px.size()) ok = false;
+        ++frames;
+    };
+    auto hold = [&](float seconds) {
+        const int n = int(std::lround(seconds * float(fps)));
+        for (int i = 0; i < n && ok; ++i) frame();
+    };
+    auto press = [&](SDL_Keycode key, float after) {
+        onKeyDown(key, false);
+        onKeyUp(key);
+        hold(after);
+    };
+    // Generation runs in real time; the video simply cuts to the level.
+    auto waitForLevel = [&] {
+        const Uint32 start = SDL_GetTicks();
+        while (scene_ == Scene::Loading && SDL_GetTicks() - start < 30000) {
+            update(0.f);
+            SDL_Delay(2);
+        }
+    };
+    auto caption = [&](const char* text, float seconds) {
+        caption_ = text;
+        captionStart_ = time_;
+        captionEnd_ = time_ + seconds;
+    };
+    auto solve = [&](float walk, float push, float speed) {
+        static const SDL_Keycode kKeys[4] = {SDLK_UP, SDLK_RIGHT, SDLK_DOWN, SDLK_LEFT};
+        animSpeed_ = speed;
+        const std::string moves = solutionMoves(board_.level(), 3000000);
+        Board sim;
+        sim.load(board_.level());
+        for (char m : moves) {
+            const int dir = m == 'U' ? DirUp : m == 'R' ? DirRight : m == 'D' ? DirDown : DirLeft;
+            const bool pushed = sim.move(dir) == Board::Result::Pushed;
+            press(kKeys[dir], pushed ? push : walk);
+        }
+        animSpeed_ = 1.f;
+    };
+
+    // ---- Storyboard ----
+    scene_ = Scene::Menu;
+    for (int i = 0; i < 90; ++i) update(dt);  // let the rain fill the screen first
+    hold(1.2f);
+    caption("PICK ANY LEVEL - YOUR PROGRESS IS SAVED", 3.6f);
+    press(SDLK_DOWN, 0.45f);
+    press(SDLK_RIGHT, 0.3f);
+    press(SDLK_RIGHT, 0.3f);
+    press(SDLK_RIGHT, 0.5f);
+    press(SDLK_LEFT, 0.25f);
+    press(SDLK_LEFT, 0.25f);
+    press(SDLK_LEFT, 0.5f);
+    press(SDLK_UP, 0.6f);
+
+    press(SDLK_RETURN, 0.f);
+    waitForLevel();
+    caption("PUSH EVERY BUN INTO A PUDDLE", 3.4f);
+    hold(0.7f);
+    solve(0.16f, 0.22f, 1.f);
+    hold(3.0f);
+
+    press(SDLK_RETURN, 0.f);
+    waitForLevel();
+    caption("EVERY LEVEL IS GENERATED - AND ALWAYS SOLVABLE", 3.8f);
+    hold(0.5f);
+    solve(0.13f, 0.18f, 1.f);
+    hold(2.8f);
+
+    press(SDLK_ESCAPE, 0.7f);
+    caption("THE PUZZLES GET HARDER AS YOU GO", 4.0f);
+    press(SDLK_1, 0.3f);
+    press(SDLK_2, 0.8f);
+    press(SDLK_RETURN, 0.f);
+    waitForLevel();
+    hold(0.6f);
+    solve(0.085f, 0.11f, 1.35f);
+    hold(3.3f);
+
+    press(SDLK_ESCAPE, 2.8f);
+
+    SDL_DestroyTexture(target);
+    std::fflush(out);
+    if (out != stdout) std::fclose(out);
+    std::fprintf(stderr, "recorded %d frames (%.1f s at %d fps, %dx%d)%s\n", frames, double(frames) / fps, fps,
+                 viewW_, viewH_, ok ? "" : " - WRITE ERRORS");
+    return ok ? 0 : 1;
 }
 
 // ---------------------------------------------------------------- level jobs
@@ -428,12 +564,12 @@ void Game::tryMove(int dir) {
     anim_.active = true;
     anim_.from = from;
     anim_.to = board_.player();
-    anim_.duration = kMoveTime;
+    anim_.duration = kMoveTime / animSpeed_;
     if (result == Board::Result::Pushed) {
         anim_.box = board_.lastPushedBox();
         anim_.boxTo = board_.boxes()[size_t(anim_.box)];
         anim_.boxFrom = anim_.boxTo - board_.level().offset(dir);
-        anim_.duration = kPushTime;
+        anim_.duration = kPushTime / animSpeed_;
         audio_.play(Sfx::Push);
     }
     if (board_.solved()) {
@@ -762,6 +898,7 @@ void Game::render() {
             renderWon();
             break;
     }
+    renderCaption();
 }
 
 void Game::renderBackground() {
@@ -998,6 +1135,19 @@ void Game::renderWon() {
     drawText(l3, cx, y, bs, perfect ? rgba(140, 255, 170) : rgba(165, 220, 255), 0);
     y += 7 * bs + 9 * s;
     drawText(keys, cx, y, bs, rgba(255, 220, 120), 0);
+}
+
+void Game::renderCaption() {
+    if (caption_.empty() || time_ < captionStart_ || time_ >= captionEnd_) return;
+    const float alpha = clamp01(std::min((time_ - captionStart_) / 0.25f, (captionEnd_ - time_) / 0.35f));
+    const int s = uiScale();
+    const int cs = fitScale(caption_, viewW_ - 20 * s, s + (s + 1) / 2);
+    const int w = textWidth(caption_, cs);
+    const int y = viewH_ - 13 * s - 7 * cs - 8 * s;
+    SDL_SetRenderDrawColor(renderer_, 5, 15, 30, Uint8(185.f * alpha));
+    SDL_Rect pill{viewW_ / 2 - w / 2 - 6 * s, y - 3 * s, w + 12 * s, 7 * cs + 6 * s};
+    SDL_RenderFillRect(renderer_, &pill);
+    drawText(caption_, viewW_ / 2, y, cs, rgba(255, 228, 150, Uint8(255.f * alpha)), 0);
 }
 
 }  // namespace soak
