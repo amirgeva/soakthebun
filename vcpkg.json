@@ -1,0 +1,8 @@
+{
+  "name": "soakthebun",
+  "version-string": "1.0.0",
+  "description": "Procedurally generated block-pushing puzzle game: soak the buns in the puddles.",
+  "dependencies": [
+    "sdl2"
+  ]
+}
