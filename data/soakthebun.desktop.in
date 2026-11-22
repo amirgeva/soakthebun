@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Soak the Bun
+GenericName=Block-Pushing Puzzle
+Comment=Push every hamburger bun into a puddle
+Exec=@CMAKE_INSTALL_FULL_BINDIR@/soakthebun
+Icon=soakthebun
+Terminal=false
+Categories=Game;LogicGame;
+Keywords=puzzle;sokoban;block;push;procedural;
+StartupNotify=false
+SingleMainWindow=true

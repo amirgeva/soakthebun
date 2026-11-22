@@ -120,5 +120,13 @@ if(SOAK_BUILD_GAME)
     endif()
   endif()
 
-  install(TARGETS soakthebun RUNTIME DESTINATION bin)
+  include(GNUInstallDirs)
+  install(TARGETS soakthebun RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  if(UNIX AND NOT APPLE)
+    configure_file(data/soakthebun.desktop.in soakthebun.desktop @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/soakthebun.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES data/soakthebun.png
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
+  endif()
 endif()
